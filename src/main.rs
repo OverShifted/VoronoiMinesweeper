@@ -1,64 +1,50 @@
 use sdl2::pixels::Color;
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
+use sdl2::mouse::MouseButton;
 use std::time::Duration;
+use sdl2::gfx::primitives::DrawRenderer;
 
-mod parabola;
-use crate::parabola::*;
+use voronator::{VoronoiDiagram, delaunator::Point as VorPoint};
 
 const W: u32 = 1800;
 const H: u32 = 900;
-const C: u32 = 300;
+const C: usize = 300;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Point {
-    id: u32,
     x: u32,
     y: u32,
-    c: Color
+    bomb: bool,
+    covered: bool,
+    flagged: bool,
+    neighbor_bombs: u32
 }
 
-fn gen_points() -> Vec<Point> {
-    let mut points = Vec::new();
-
-    for i in 0..C {
-        points.push(Point {
-            id: i,
-            x: (rand::random::<f64>() * W as f64) as u32,
-            y: (rand::random::<f64>() * H as f64) as u32,
-            c: Color::RGB(rand::random::<u8>(), rand::random::<u8>(), rand::random::<u8>())
-        });
-    }
-
-    points
-}
-
-fn get_point_cell(x: u32, y: u32, points: &Vec<Point>) -> (Point, f64) {
+fn get_point_cell(x: u32, y: u32, points: &Vec<Point>) -> (usize, f64) {
     let mut best_dist = f64::INFINITY;
-    let mut best_point = Point { id: 0, x: 0, y: 0, c: Color::BLACK };
+    let mut best_point = 0;
 
-    for point in points {
+    for (i, point) in points.iter().enumerate() {
         let d = (x as f64 - point.x as f64).powf(2.0) + (y as f64 - point.y as f64).powf(2.0);
         if d < best_dist {
             best_dist = d;
-            best_point = *point;
+            best_point = i;
         }
     }
 
     (best_point, best_dist)
 }
 
-fn are_neighbor(p0: &Point, p1: &Point, points: &Vec<Point>) -> bool {
-    let mid_x = (p0.x + p1.x) / 2;
-    let mid_y = (p0.y + p1.y) / 2;
-
-    let (Point { id, .. }, _) = get_point_cell(mid_x, mid_y, points);
-    id == p0.id || id == p1.id
+fn calculate_bomb_neighbours(diagram: &VoronoiDiagram::<VorPoint>, points: &mut Vec<Point>) {
+    for i in 0..C {
+        let neighbor = &diagram.neighbors[i];
+        let bomb_count: u32 = neighbor.iter().map(|&n| if n < C && points[n].bomb { 1 } else { 0 }).sum();
+        points[i].neighbor_bombs = bomb_count;
+    }
 }
 
 fn main() {
-    // println!("{:?}", crate::parabola::Parabola{ a: 1.0, b: 1.0, c: 1.0 }.solve());
-
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
 
@@ -69,68 +55,27 @@ fn main() {
         .build()
         .unwrap();
 
-    let points = gen_points();
+    let mut canvas = window.into_canvas().build().unwrap();
 
-    {
-        let mut points_left: Vec<Option<Point>> = points.iter().map(|&p| Some(p)).collect();
-        let mut points_saw = Vec::new();
+    let mut points: Vec<Point> = (0..C)
+        .map(|_| Point {
+            x: (rand::random::<f64>() * W as f64) as u32,
+            y: (rand::random::<f64>() * H as f64) as u32,
+            bomb: rand::random::<bool>(),
+            covered: true,
+            flagged: false,
+            neighbor_bombs: 0
+        }).collect();
 
-        for sweepline in 0..H {
-            // Add new points
-            for p_option in &mut points_left {
-                if let Some(p) = *p_option {
-                    if p.y == sweepline {
-                        points_saw.push(p);
-                        println!("{}", p.y);
-                        *p_option = None;
-                    }
-                }
-            }
+    let diagram = VoronoiDiagram::<VorPoint>::from_tuple(
+        &(0., 0.), &(W as f64, H as f64),
+        &points.iter().map(|p| (p.x as f64, p.y as f64)).collect::<Vec<(f64, f64)>>()
+    ).unwrap();
 
-            let parabolas: Vec<Parabola> = points_saw.iter().map(|&p| Parabola::from_line_and_point(p.x as f64, p.y as f64, sweepline as f64)).collect();
-
-            let eval_beachline = |x| {
-                let mut min = f64::INFINITY;
-                for p in &parabolas {
-                    let eval = p.eval(x);
-                    if eval < min {
-                        min = eval
-                    }
-                }
-
-                min
-            };
-
-            for p0 in &parabolas {
-                for p1 in &parabolas {
-                    p0.collides_at(p1, |x| p0.eval(x) < eval_beachline(x));
-                }
-            }
-        }
-    }
+    let mut player_is_looser = false;
+    let mut all_covered = true;
 
     'running: loop {
-
-        let mut surface = window.surface(&event_pump).unwrap();
-        
-        surface.with_lock_mut(|data| {
-            for x in 0..W {
-                for y in 0..H {
-                    let (Point { c: mut color, .. }, best_dist) = get_point_cell(x, y, &points);
-
-                    if best_dist < 10.0 {
-                        color = Color::BLACK;
-                    }
-
-                    data[(4 * (x + W * y) + 0) as usize] = color.r;
-                    data[(4 * (x + W * y) + 1) as usize] = color.g;
-                    data[(4 * (x + W * y) + 2) as usize] = color.b;
-                    data[(4 * (x + W * y) + 3) as usize] = 255;
-                }
-            }
-        });
-
-        surface.finish().unwrap();
 
         for event in event_pump.poll_iter() {
             match event {
@@ -138,10 +83,126 @@ fn main() {
                 Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
                     break 'running
                 },
+                Event::MouseButtonDown{ mouse_btn: MouseButton::Left, x, y, .. } => {
+                    if !player_is_looser {
+                        let (i, _) = get_point_cell(x as u32, y as u32, &points);
+
+                        if all_covered {
+                            if points[i].bomb {
+                                for point in &mut points {
+                                    point.bomb = !point.bomb;
+                                }
+                            }
+                            calculate_bomb_neighbours(&diagram, &mut points);
+                        }
+
+                        all_covered = false;
+
+                        let point = &mut points[i];
+                        point.covered = false;
+
+                        if point.bomb {
+                            println!("Boom :)))");
+                            // player_is_looser = true;
+                        } else {
+                            // Uncover all non-bomb neighbor cells
+                            println!("This: {}", points[i].neighbor_bombs);
+                            let mut queue = vec![Some(i)];
+                            let mut i = 0;
+
+                            'queue: loop {
+                                if let Some(cell) = queue[i] {
+                                    let neighbors = &diagram.neighbors[cell];
+
+                                    for &neighbor_idx in neighbors {
+                                        if neighbor_idx >= C as usize {
+                                            continue
+                                        }
+
+                                        let neighbor = &mut points[neighbor_idx];
+
+                                        if !neighbor.bomb && neighbor.covered {
+                                            neighbor.covered = false;
+                                            queue.push(Some(neighbor_idx));
+                                        }
+                                    }
+
+                                    queue[i] = None;
+                                } else {
+                                    i += 1;
+                                    if i == queue.len() {
+                                        break 'queue;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                Event::MouseButtonDown{ mouse_btn: MouseButton::Right, x, y, .. } => {
+                    if !player_is_looser {
+                        let (i, _) = get_point_cell(x as u32, y as u32, &points);
+
+                        points[i].flagged = !points[i].flagged;
+                    }
+                },
                 _ => {}
             }
         }
-        // The rest of the game loop goes here...
+
+
+        for (i, cell) in diagram.cells().iter().enumerate() {
+            let xs: Vec<i16> = cell.points().into_iter()
+                .map(|p| p.x as i16)
+                .collect();
+
+            let ys: Vec<i16> = cell.points().into_iter()
+                .map(|p| p.y as i16)
+                .collect();
+
+            let err = canvas.filled_polygon(&xs, &ys,
+                if points[i].covered {
+                    if points[i].flagged {
+                        Color::MAGENTA
+                    } else {
+                        Color::WHITE
+                    }
+                } else {
+                    if points[i].bomb {
+                        Color::RED
+                    } else {
+                        Color::GRAY
+                    }
+                }
+            );//.unwrap();
+
+            if let Err(..) = err {
+                println!("Error at cell {} {:?}", i, points[i]);
+            }
+        }
+
+        for (i, cell) in diagram.cells().iter().enumerate() {
+            let xs: Vec<i16> = cell.points().into_iter()
+                .map(|p| p.x as i16)
+                .collect();
+
+            let ys: Vec<i16> = cell.points().into_iter()
+                .map(|p| p.y as i16)
+                .collect();
+
+            let err = canvas.aa_polygon(&xs, &ys, Color::BLACK);
+
+            if let Err(..) = err {
+                println!("Error at cell {} {:?}", i, points[i]);
+            }
+
+            let point = points[i];
+
+            if !point.covered && !point.bomb {
+                canvas.string(points[i].x as i16, points[i].y as i16, &points[i].neighbor_bombs.to_string(), Color::BLUE).unwrap();
+            }
+        }
+
+        canvas.present();
 
         ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 60));
     }
