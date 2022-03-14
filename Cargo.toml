@@ -9,3 +9,4 @@ edition = "2021"
 sdl2 = {version = "0.35.2", features = ["gfx"]}
 rand = "0.8.5"
 voronator = "0.2.0"
+# noise = "0.7.0"

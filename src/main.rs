@@ -9,7 +9,12 @@ use voronator::{VoronoiDiagram, delaunator::Point as VorPoint};
 
 const W: u32 = 1800;
 const H: u32 = 900;
-const C: usize = 300;
+
+const CX: usize = 10;
+const CY: usize = 5;
+const C: usize = CX * CY;
+
+const PAD: usize = 100;
 
 #[derive(Clone, Copy, Debug)]
 struct Point {
@@ -44,6 +49,20 @@ fn calculate_bomb_neighbours(diagram: &VoronoiDiagram::<VorPoint>, points: &mut 
     }
 }
 
+fn get_random_bombness() -> bool {
+    rand::random::<f64>() > 0.8
+}
+
+fn check_win(points: &Vec<Point>) -> bool {
+    for point in points {
+        if point.flagged != point.bomb {
+            return false;
+        }
+    }
+
+    true
+}
+
 fn main() {
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
@@ -57,22 +76,32 @@ fn main() {
 
     let mut canvas = window.into_canvas().build().unwrap();
 
-    let mut points: Vec<Point> = (0..C)
-        .map(|_| Point {
-            x: (rand::random::<f64>() * W as f64) as u32,
-            y: (rand::random::<f64>() * H as f64) as u32,
-            bomb: rand::random::<bool>(),
-            covered: true,
-            flagged: false,
-            neighbor_bombs: 0
-        }).collect();
+    let mut points = Vec::new();
+
+    for x in 0..CX {
+        for y in 0..CY {
+            points.push(
+                Point {
+                    x: (x as f64 / CX as f64 * (W as f64 - 2.0 * PAD as f64) + PAD as f64 + (rand::random::<f64>() - 0.5) * 200.0 as f64) as u32,
+                    y: (y as f64 / CY as f64 * (H as f64 - 2.0 * PAD as f64) + PAD as f64 + (rand::random::<f64>() - 0.5) * 200.0 as f64) as u32,
+                    bomb: get_random_bombness(),
+                    covered: true,
+                    flagged: false,
+                    neighbor_bombs: 0
+                }
+            );
+        }
+    }
+
+    // println!("{:?}", points);
+    // println!("{:?}", (0..CX).zip(0..CY).collect::<Vec<(usize, usize)>>());
 
     let diagram = VoronoiDiagram::<VorPoint>::from_tuple(
         &(0., 0.), &(W as f64, H as f64),
         &points.iter().map(|p| (p.x as f64, p.y as f64)).collect::<Vec<(f64, f64)>>()
     ).unwrap();
 
-    let mut player_is_looser = false;
+    let mut game_over = false;
     let mut all_covered = true;
 
     'running: loop {
@@ -84,13 +113,17 @@ fn main() {
                     break 'running
                 },
                 Event::MouseButtonDown{ mouse_btn: MouseButton::Left, x, y, .. } => {
-                    if !player_is_looser {
+                    if !game_over {
                         let (i, _) = get_point_cell(x as u32, y as u32, &points);
 
                         if all_covered {
                             if points[i].bomb {
-                                for point in &mut points {
-                                    point.bomb = !point.bomb;
+                                points[i].bomb = false;
+                                println!("ma kami shar bepa mikonim....");
+                                for (i_, point) in points.iter_mut().enumerate() {
+                                    if i_ != i {
+                                        point.bomb = get_random_bombness();
+                                    }
                                 }
                             }
                             calculate_bomb_neighbours(&diagram, &mut points);
@@ -103,10 +136,11 @@ fn main() {
 
                         if point.bomb {
                             println!("Boom :)))");
-                            // player_is_looser = true;
+                            game_over = true;
                         } else {
                             // Uncover all non-bomb neighbor cells
-                            println!("This: {}", points[i].neighbor_bombs);
+                            // println!("This: {}", points[i].neighbor_bombs);
+                            // TODO: Is Option<T> really needed?
                             let mut queue = vec![Some(i)];
                             let mut i = 0;
 
@@ -121,9 +155,12 @@ fn main() {
 
                                         let neighbor = &mut points[neighbor_idx];
 
-                                        if !neighbor.bomb && neighbor.covered {
+                                        if !neighbor.bomb && !neighbor.flagged && neighbor.covered {
                                             neighbor.covered = false;
-                                            queue.push(Some(neighbor_idx));
+
+                                            if neighbor.neighbor_bombs == 0 {
+                                                queue.push(Some(neighbor_idx));
+                                            }
                                         }
                                     }
 
@@ -139,10 +176,14 @@ fn main() {
                     }
                 },
                 Event::MouseButtonDown{ mouse_btn: MouseButton::Right, x, y, .. } => {
-                    if !player_is_looser {
+                    if !game_over {
                         let (i, _) = get_point_cell(x as u32, y as u32, &points);
 
                         points[i].flagged = !points[i].flagged;
+                        if check_win(&points) {
+                            println!("Won :)");
+                            game_over = true;
+                        }
                     }
                 },
                 _ => {}
@@ -197,8 +238,17 @@ fn main() {
 
             let point = points[i];
 
-            if !point.covered && !point.bomb {
-                canvas.string(points[i].x as i16, points[i].y as i16, &points[i].neighbor_bombs.to_string(), Color::BLUE).unwrap();
+            if !point.covered && !point.bomb && point.neighbor_bombs > 0 {
+                let mut mean = (0.0, 0.0);
+
+                for point in cell.points() {
+                    mean.0 += point.x;
+                    mean.1 += point.y;
+                }
+                mean.0 /= cell.points().len() as f64;
+                mean.1 /= cell.points().len() as f64;
+
+                canvas.string(mean.0 as i16, mean.1 as i16, &point.neighbor_bombs.to_string(), Color::BLUE).unwrap();
             }
         }
 
