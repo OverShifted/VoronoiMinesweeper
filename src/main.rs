@@ -1,13 +1,13 @@
-use sdl2::rect::Rect;
-use sdl2::render::{Canvas, RenderTarget, TextureCreator};
-use sdl2::pixels::Color;
 use sdl2::event::Event;
+use sdl2::gfx::primitives::DrawRenderer;
 use sdl2::keyboard::Keycode;
 use sdl2::mouse::MouseButton;
+use sdl2::pixels::Color;
+use sdl2::rect::Rect;
+use sdl2::render::{Canvas, RenderTarget, TextureCreator};
 use std::time::Duration;
-use sdl2::gfx::primitives::DrawRenderer;
 
-use voronator::{VoronoiDiagram, delaunator::Point as VorPoint};
+use voronator::{delaunator::Point as VorPoint, VoronoiDiagram};
 
 mod colors;
 
@@ -27,7 +27,7 @@ struct Point {
     bomb: bool,
     covered: bool,
     flagged: bool,
-    neighbor_bombs: u32
+    neighbor_bombs: u32,
 }
 
 impl Point {
@@ -35,12 +35,12 @@ impl Point {
         match self.covered {
             true => match self.flagged {
                 true => colors::CELL_FLAGGED,
-                false => colors::CELL_COVERED
+                false => colors::CELL_COVERED,
             },
             false => match self.bomb {
                 true => colors::CELL_BOMBED,
-                false => colors::CELL_UNCOVERED
-            }
+                false => colors::CELL_UNCOVERED,
+            },
         }
     }
 }
@@ -60,10 +60,13 @@ fn get_point_cell(x: u32, y: u32, points: &Vec<Point>) -> (usize, f64) {
     (best_point, best_dist)
 }
 
-fn calculate_bomb_neighbours(diagram: &VoronoiDiagram::<VorPoint>, points: &mut Vec<Point>) {
+fn calculate_bomb_neighbours(diagram: &VoronoiDiagram<VorPoint>, points: &mut Vec<Point>) {
     for i in 0..C {
         let neighbor = &diagram.neighbors[i];
-        let bomb_count: u32 = neighbor.iter().map(|&n| if n < C && points[n].bomb { 1 } else { 0 }).sum();
+        let bomb_count: u32 = neighbor
+            .iter()
+            .map(|&n| if n < C && points[n].bomb { 1 } else { 0 })
+            .sum();
         points[i].neighbor_bombs = bomb_count;
     }
 }
@@ -82,13 +85,29 @@ fn check_win(points: &Vec<Point>) -> bool {
     true
 }
 
-fn render_text<Ctx, RTarget: RenderTarget>(texture_creator: &TextureCreator<Ctx>, canvas: &mut Canvas<RTarget>, center: (i32, i32), string: &str, color: Color) {
+fn render_text<Ctx, RTarget: RenderTarget>(
+    texture_creator: &TextureCreator<Ctx>,
+    canvas: &mut Canvas<RTarget>,
+    center: (i32, i32),
+    string: &str,
+    color: Color,
+) {
     let context = sdl2::ttf::init().unwrap();
     let font = context.load_font("Roboto/Roboto-Regular.ttf", 30).unwrap();
     let surface = font.render(string).blended(color).unwrap();
     let texture = surface.as_texture(texture_creator).unwrap();
 
-    canvas.copy(&texture, None, Rect::from_center(sdl2::rect::Point::new(center.0, center.1), surface.size().0, surface.size().1)).unwrap();
+    canvas
+        .copy(
+            &texture,
+            None,
+            Rect::from_center(
+                sdl2::rect::Point::new(center.0, center.1),
+                surface.size().0,
+                surface.size().1,
+            ),
+        )
+        .unwrap();
 }
 
 fn main() {
@@ -97,7 +116,8 @@ fn main() {
 
     let mut event_pump = sdl_context.event_pump().unwrap();
 
-    let window = video_subsystem.window("Voronoi minesweeper", W, H)
+    let window = video_subsystem
+        .window("Voronoi minesweeper", W, H)
         .position_centered()
         .build()
         .unwrap();
@@ -109,16 +129,18 @@ fn main() {
 
     for x in 0..CX {
         for y in 0..CY {
-            points.push(
-                Point {
-                    x: (x as f64 / CX as f64 * (W as f64 - 2.0 * PAD as f64) + PAD as f64 + (rand::random::<f64>() - 0.5) * 200.0 as f64) as u32,
-                    y: (y as f64 / CY as f64 * (H as f64 - 2.0 * PAD as f64) + PAD as f64 + (rand::random::<f64>() - 0.5) * 200.0 as f64) as u32,
-                    bomb: get_random_bombness(),
-                    covered: true,
-                    flagged: false,
-                    neighbor_bombs: 0
-                }
-            );
+            points.push(Point {
+                x: (x as f64 / CX as f64 * (W as f64 - 2.0 * PAD as f64)
+                    + PAD as f64
+                    + (rand::random::<f64>() - 0.5) * 200.0 as f64) as u32,
+                y: (y as f64 / CY as f64 * (H as f64 - 2.0 * PAD as f64)
+                    + PAD as f64
+                    + (rand::random::<f64>() - 0.5) * 200.0 as f64) as u32,
+                bomb: get_random_bombness(),
+                covered: true,
+                flagged: false,
+                neighbor_bombs: 0,
+            });
         }
     }
 
@@ -126,22 +148,32 @@ fn main() {
     // println!("{:?}", (0..CX).zip(0..CY).collect::<Vec<(usize, usize)>>());
 
     let diagram = VoronoiDiagram::<VorPoint>::from_tuple(
-        &(0., 0.), &(W as f64, H as f64),
-        &points.iter().map(|p| (p.x as f64, p.y as f64)).collect::<Vec<(f64, f64)>>()
-    ).unwrap();
+        &(0., 0.),
+        &(W as f64, H as f64),
+        &points
+            .iter()
+            .map(|p| (p.x as f64, p.y as f64))
+            .collect::<Vec<(f64, f64)>>(),
+    )
+    .unwrap();
 
     let mut game_over = false;
     let mut all_covered = true;
 
     'running: loop {
-
         for event in event_pump.poll_iter() {
             match event {
-                Event::Quit {..} |
-                Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
-                    break 'running
-                },
-                Event::MouseButtonDown{ mouse_btn: MouseButton::Left, x, y, .. } => {
+                Event::Quit { .. }
+                | Event::KeyDown {
+                    keycode: Some(Keycode::Escape),
+                    ..
+                } => break 'running,
+                Event::MouseButtonDown {
+                    mouse_btn: MouseButton::Left,
+                    x,
+                    y,
+                    ..
+                } => {
                     if !game_over {
                         let (i, _) = get_point_cell(x as u32, y as u32, &points);
 
@@ -173,7 +205,7 @@ fn main() {
 
                                     for &neighbor_idx in neighbors {
                                         if neighbor_idx >= C as usize {
-                                            continue
+                                            continue;
                                         }
 
                                         let neighbor = &mut points[neighbor_idx];
@@ -197,8 +229,13 @@ fn main() {
                             }
                         }
                     }
-                },
-                Event::MouseButtonDown{ mouse_btn: MouseButton::Right, x, y, .. } => {
+                }
+                Event::MouseButtonDown {
+                    mouse_btn: MouseButton::Right,
+                    x,
+                    y,
+                    ..
+                } => {
                     if !game_over {
                         let (i, _) = get_point_cell(x as u32, y as u32, &points);
 
@@ -208,7 +245,7 @@ fn main() {
                             game_over = true;
                         }
                     }
-                },
+                }
                 _ => {}
             }
         }
@@ -218,29 +255,21 @@ fn main() {
 
         // Render cells
         for (i, cell) in diagram.cells().iter().enumerate() {
-            let xs: Vec<i16> = cell.points().into_iter()
-                .map(|p| p.x as i16)
-                .collect();
+            let xs: Vec<i16> = cell.points().into_iter().map(|p| p.x as i16).collect();
 
-            let ys: Vec<i16> = cell.points().into_iter()
-                .map(|p| p.y as i16)
-                .collect();
+            let ys: Vec<i16> = cell.points().into_iter().map(|p| p.y as i16).collect();
 
-                let result = canvas.filled_polygon(&xs, &ys, points[i].color());
-                if let Err(..) = result {
-                    println!("Error at cell {} {:?}", i, points[i]);
-                }
+            let result = canvas.filled_polygon(&xs, &ys, points[i].color());
+            if let Err(..) = result {
+                println!("Error at cell {} {:?}", i, points[i]);
+            }
         }
 
         // Draw black outlines and numbers
         for (i, cell) in diagram.cells().iter().enumerate() {
-            let xs: Vec<i16> = cell.points().into_iter()
-                .map(|p| p.x as i16)
-                .collect();
+            let xs: Vec<i16> = cell.points().into_iter().map(|p| p.x as i16).collect();
 
-            let ys: Vec<i16> = cell.points().into_iter()
-                .map(|p| p.y as i16)
-                .collect();
+            let ys: Vec<i16> = cell.points().into_iter().map(|p| p.y as i16).collect();
 
             let result = canvas.aa_polygon(&xs, &ys, colors::CELL_OUTLINE);
             if let Err(..) = result {
@@ -259,7 +288,13 @@ fn main() {
                 mean.1 /= cell.points().len() as f64;
 
                 let mean = (mean.0 as i32, mean.1 as i32);
-                render_text(&texture_creator, &mut canvas, mean, &point.neighbor_bombs.to_string(), colors::NUMBERS);
+                render_text(
+                    &texture_creator,
+                    &mut canvas,
+                    mean,
+                    &point.neighbor_bombs.to_string(),
+                    colors::NUMBERS,
+                );
             }
         }
 
