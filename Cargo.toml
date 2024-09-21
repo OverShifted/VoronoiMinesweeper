@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-sdl2 = {version = "0.35.2", features = ["gfx"]}
+sdl2 = {version = "0.35.2", features = ["gfx", "ttf"]}
 rand = "0.8.5"
 voronator = "0.2.0"
 # noise = "0.7.0"

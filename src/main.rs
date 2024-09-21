@@ -1,3 +1,5 @@
+use sdl2::rect::Rect;
+use sdl2::render::{Canvas, RenderTarget, TextureCreator};
 use sdl2::pixels::Color;
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
@@ -6,6 +8,8 @@ use std::time::Duration;
 use sdl2::gfx::primitives::DrawRenderer;
 
 use voronator::{VoronoiDiagram, delaunator::Point as VorPoint};
+
+mod colors;
 
 const W: u32 = 1800;
 const H: u32 = 900;
@@ -24,6 +28,21 @@ struct Point {
     covered: bool,
     flagged: bool,
     neighbor_bombs: u32
+}
+
+impl Point {
+    fn color(&self) -> Color {
+        match self.covered {
+            true => match self.flagged {
+                true => colors::CELL_FLAGGED,
+                false => colors::CELL_COVERED
+            },
+            false => match self.bomb {
+                true => colors::CELL_BOMBED,
+                false => colors::CELL_UNCOVERED
+            }
+        }
+    }
 }
 
 fn get_point_cell(x: u32, y: u32, points: &Vec<Point>) -> (usize, f64) {
@@ -50,7 +69,7 @@ fn calculate_bomb_neighbours(diagram: &VoronoiDiagram::<VorPoint>, points: &mut 
 }
 
 fn get_random_bombness() -> bool {
-    rand::random::<f64>() > 0.8
+    rand::random::<f64>() > 0.85
 }
 
 fn check_win(points: &Vec<Point>) -> bool {
@@ -63,18 +82,28 @@ fn check_win(points: &Vec<Point>) -> bool {
     true
 }
 
+fn render_text<Ctx, RTarget: RenderTarget>(texture_creator: &TextureCreator<Ctx>, canvas: &mut Canvas<RTarget>, center: (i32, i32), string: &str, color: Color) {
+    let context = sdl2::ttf::init().unwrap();
+    let font = context.load_font("Roboto/Roboto-Regular.ttf", 30).unwrap();
+    let surface = font.render(string).blended(color).unwrap();
+    let texture = surface.as_texture(texture_creator).unwrap();
+
+    canvas.copy(&texture, None, Rect::from_center(sdl2::rect::Point::new(center.0, center.1), surface.size().0, surface.size().1)).unwrap();
+}
+
 fn main() {
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
 
     let mut event_pump = sdl_context.event_pump().unwrap();
 
-    let window = video_subsystem.window("> /dev/null", W, H)
+    let window = video_subsystem.window("Voronoi minesweeper", W, H)
         .position_centered()
         .build()
         .unwrap();
 
     let mut canvas = window.into_canvas().build().unwrap();
+    let texture_creator = canvas.texture_creator();
 
     let mut points = Vec::new();
 
@@ -117,19 +146,13 @@ fn main() {
                         let (i, _) = get_point_cell(x as u32, y as u32, &points);
 
                         if all_covered {
-                            if points[i].bomb {
-                                points[i].bomb = false;
-                                println!("ma kami shar bepa mikonim....");
-                                for (i_, point) in points.iter_mut().enumerate() {
-                                    if i_ != i {
-                                        point.bomb = get_random_bombness();
-                                    }
-                                }
-                            }
+                            // If we hit a bomb on the first try,
+                            // pretend that it wasn't a bomb in the first place.
+                            // This is why calculate_bomb_neighbours is defered until here.
+                            points[i].bomb = false;
                             calculate_bomb_neighbours(&diagram, &mut points);
+                            all_covered = false;
                         }
-
-                        all_covered = false;
 
                         let point = &mut points[i];
                         point.covered = false;
@@ -190,7 +213,10 @@ fn main() {
             }
         }
 
+        canvas.set_draw_color(Color::BLACK);
+        canvas.clear();
 
+        // Render cells
         for (i, cell) in diagram.cells().iter().enumerate() {
             let xs: Vec<i16> = cell.points().into_iter()
                 .map(|p| p.x as i16)
@@ -200,27 +226,13 @@ fn main() {
                 .map(|p| p.y as i16)
                 .collect();
 
-            let err = canvas.filled_polygon(&xs, &ys,
-                if points[i].covered {
-                    if points[i].flagged {
-                        Color::MAGENTA
-                    } else {
-                        Color::WHITE
-                    }
-                } else {
-                    if points[i].bomb {
-                        Color::RED
-                    } else {
-                        Color::GRAY
-                    }
+                let result = canvas.filled_polygon(&xs, &ys, points[i].color());
+                if let Err(..) = result {
+                    println!("Error at cell {} {:?}", i, points[i]);
                 }
-            );//.unwrap();
-
-            if let Err(..) = err {
-                println!("Error at cell {} {:?}", i, points[i]);
-            }
         }
 
+        // Draw black outlines and numbers
         for (i, cell) in diagram.cells().iter().enumerate() {
             let xs: Vec<i16> = cell.points().into_iter()
                 .map(|p| p.x as i16)
@@ -230,14 +242,12 @@ fn main() {
                 .map(|p| p.y as i16)
                 .collect();
 
-            let err = canvas.aa_polygon(&xs, &ys, Color::BLACK);
-
-            if let Err(..) = err {
+            let result = canvas.aa_polygon(&xs, &ys, colors::CELL_OUTLINE);
+            if let Err(..) = result {
                 println!("Error at cell {} {:?}", i, points[i]);
             }
 
-            let point = points[i];
-
+            let point = &points[i];
             if !point.covered && !point.bomb && point.neighbor_bombs > 0 {
                 let mut mean = (0.0, 0.0);
 
@@ -248,12 +258,12 @@ fn main() {
                 mean.0 /= cell.points().len() as f64;
                 mean.1 /= cell.points().len() as f64;
 
-                canvas.string(mean.0 as i16, mean.1 as i16, &point.neighbor_bombs.to_string(), Color::BLUE).unwrap();
+                let mean = (mean.0 as i32, mean.1 as i32);
+                render_text(&texture_creator, &mut canvas, mean, &point.neighbor_bombs.to_string(), colors::NUMBERS);
             }
         }
 
         canvas.present();
-
-        ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 60));
+        std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 60));
     }
 }
